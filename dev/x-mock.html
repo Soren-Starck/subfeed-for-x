@@ -19,9 +19,16 @@
   [data-testid=primaryColumn] { width: 600px; min-height: 100vh; border-left: 1px solid var(--line); border-right: 1px solid var(--line); }
   [data-testid=sidebarColumn] { width: 350px; padding-top: 6px; }
   .sticky { position: sticky; top: 0; }
-  .tabs { display: flex; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--bg); z-index: 1; }
-  .tabs [role=tab] { flex: 1; text-align: center; padding: 16px; font-weight: 600; color: var(--muted); }
-  .tabs [aria-selected=true] { color: var(--fg); }
+  .head { position: sticky; top: 0; z-index: 1; }
+  .head .blur { position: absolute; inset: 0; background: color-mix(in srgb, var(--bg) 85%, transparent); backdrop-filter: blur(12px); }
+  .head .top { position: relative; height: 53px; display: flex; align-items: center; justify-content: center; font-size: 22px; }
+  .tabsrow { position: relative; display: flex; align-items: center; border-bottom: 1px solid var(--line); }
+  .tabsrow .fill { flex: 1; }
+  [role=tablist] { display: flex; }
+  [role=presentation] { flex: 1; }
+  [role=tab] { display: block; text-align: center; padding: 16px; font-weight: 600; color: var(--muted); text-decoration: none; }
+  [role=tab][aria-selected=true] { color: var(--fg); }
+  .manage button { all: unset; padding: 0 16px; font-size: 22px; color: var(--muted); cursor: pointer; }
   [data-testid=cellInnerDiv] { border-bottom: 1px solid var(--line); padding: 12px 16px; }
   article { display: flex; gap: 12px; }
   .av { width: 40px; height: 40px; border-radius: 50%; background: var(--line); flex: none; }
@@ -58,10 +65,11 @@
     <button data-testid="SideNav_AccountSwitcher_Button" aria-label="Account menu">You</button>
   </header>
   <main data-testid="primaryColumn">
-    <div role="tablist" class="tabs"><a role="tab" aria-selected="false">For you</a><a role="tab" aria-selected="true">Following</a></div>
+    <div aria-label="Home timeline" id="home">
     <div id="list"></div>
     <div id="sentinel" style="height: 1px"></div>
-    <div id="spinner" class="end">Loading…</div>
+    <div id="spinner" class="end" role="progressbar">Loading…</div>
+    </div>
   </main>
   <div data-testid="sidebarColumn"><div class="sticky"><div aria-label="Trending"><div id="side">
     <div style="position: fixed; top: 0; width: 350px; padding-top: 6px; background: var(--bg); z-index: 2"><div><form role="search"><input placeholder="Search"></form></div></div>
@@ -95,7 +103,42 @@
     side.insertBefore(t.cloneNode(true), wtf);
     t.remove();
   }, 1200);
-  const M = (window.__mock = { entries: [], atBottom: false, loading: false, requests: 0, inserted: 0, removed: 0 });
+  const M = (window.__mock = { entries: [], atBottom: false, loading: false, requests: 0, inserted: 0, removed: 0, ops: [], gen: 0 });
+  // Home's tab bar, as X draws it a moment after load: the open tab is the one
+  // X remembers (For you, unless you picked Following). Pinned lists would come
+  // after the two. ?narrow=1 adds X's top bar above the tabs, as on a phone.
+  M.tab = localStorage.getItem("mock.tab") || "following";
+  const narrow = new URLSearchParams(location.search).has("narrow");
+  setTimeout(() => {
+    const head = document.createElement("div");
+    head.className = "head";
+    head.innerHTML = `<div class="blur"></div><div>${narrow ? '<div class="top">𝕏</div>' : ""}<div class="tabsrow"><div class="fill">
+      <nav role="navigation" aria-live="polite"><div><div data-testid="ScrollSnap-SwipeableList"><div role="tablist" data-testid="ScrollSnap-List">
+        <div role="presentation"><a href="/home" role="tab" aria-selected="false"><span>For you</span></a></div>
+        <div role="presentation"><a href="/home" role="tab" aria-selected="false"><span>Following</span></a></div>
+        <div role="presentation"><a href="/home" role="tab" aria-selected="false"><span>A pinned list</span></a></div>
+      </div></div></div></nav></div>
+      <div class="manage"><button aria-label="Manage tabs">+</button></div></div></div>`;
+    const tabs = [...head.querySelectorAll("[role=tab]")];
+    const show = () => tabs.forEach((t, i) => t.setAttribute("aria-selected", String(["for-you", "following", "list"][i] === M.tab)));
+    tabs.forEach((t, i) => t.addEventListener("click", (e) => {
+      e.preventDefault();
+      const tab = ["for-you", "following", "list"][i];
+      if (tab === M.tab) return;
+      M.tab = tab;
+      localStorage.setItem("mock.tab", tab);
+      show();
+      // A new timeline: whatever the old one still has in flight is dropped.
+      M.gen++;
+      M.entries = [];
+      M.atBottom = false;
+      M.loading = false;
+      render();
+      first();
+    }));
+    show();
+    document.getElementById("home").prepend(head);
+  }, 40);
 
   // Like X's HttpClient: open, timeout, credentials, headers (with a fresh
   // transaction id), onreadystatechange set before send, POST body for Following.
@@ -105,7 +148,9 @@
       // X's network monitoring reads every response first, in its own listener.
       xhr.addEventListener("load", () => (M.peeked = (M.peeked || 0) + (xhr.responseText ? 1 : 0)));
       const variables = { count: 20, includePromotedContent: true, latestControlAvailable: true, requestContext: "launch", seenTweetIds: [], ...(cursor ? { cursor } : {}) };
-      xhr.open("POST", location.origin + "/i/api/graphql/MOCKqid/HomeLatestTimeline");
+      const op = M.tab === "for-you" ? "HomeTimeline" : "HomeLatestTimeline";
+      M.ops.push(op);
+      xhr.open("POST", location.origin + "/i/api/graphql/MOCKqid/" + op);
       xhr.timeout = 0;
       xhr.withCredentials = true;
       const headers = { authorization: "Bearer mock", "content-type": "application/json", "x-client-transaction-id": "tid-" + Math.random().toString(36).slice(2), "x-twitter-active-user": "yes" };
@@ -148,7 +193,7 @@
     const u = o.core.user_results.result.legacy;
     const ctx = o !== t ? `<div class="ctx">${esc(t.core.user_results.result.legacy.name)} reposted</div>` : ic.promotedMetadata ? `<div class="ctx">Ad</div>` : "";
     const hue = [...u.screen_name].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 7);
-    return `<div data-testid="cellInnerDiv">${ctx}<article data-testid="tweet" tabindex="0"><div class="av" style="background: hsl(${hue} 45% 72%)"></div><div style="flex:1">
+    return `<div data-testid="cellInnerDiv" data-tab="${M.tab}">${ctx}<article data-testid="tweet" tabindex="0"><div class="av" style="background: hsl(${hue} 45% 72%)"></div><div style="flex:1">
       <div class="meta" data-testid="User-Name"><b>${esc(u.name)}</b> <span class="h">@${esc(u.screen_name)}</span> · <a href="/${esc(u.screen_name)}/status/${o.rest_id}"><time datetime="${new Date(o.legacy.created_at).toISOString()}">${new Date(o.legacy.created_at).toLocaleString()}</time></a></div>
       <div class="txt" data-testid="tweetText">${esc(o.legacy.full_text)}</div></div></article></div>`;
   }
@@ -176,8 +221,11 @@
     if (M.loading || M.atBottom || !document.querySelector("article")) return;
     const c = bottomCursor();
     if (!c) return;
+    const gen = M.gen;
     M.loading = true;
-    apply(await api(c.content.value), c);
+    const json = await api(c.content.value);
+    if (gen !== M.gen) return;
+    apply(json, c);
     M.loading = false;
     near();
   }
@@ -186,12 +234,16 @@
     if (r.top < innerHeight + 1200) fetchBottom();
   };
   addEventListener("scroll", near, { passive: true });
-  (async () => {
+  async function first() {
+    const gen = M.gen;
     M.loading = true;
-    apply(await api(null), null);
+    const json = await api(null);
+    if (gen !== M.gen) return;
+    apply(json, null);
     M.loading = false;
     near();
-  })();
+  }
+  first();
 </script>
 </body>
 </html>

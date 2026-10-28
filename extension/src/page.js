@@ -1,8 +1,9 @@
 /* SubFeed for X: two switches.
 
    "Minimalist" hides X's right column (news, trends, who to follow, footer)
-   except its search bar and these switches, and leaves only Home,
-   Notifications, Profile and Post in the left menu, before X draws them.
+   except its search bar and these switches, leaves only Home,
+   Notifications, Profile and Post in the left menu, and drops Home's tab
+   bar (For you, Following) to keep you on Following, before X draws them.
 
    "Never twice": when it is on, X's home
    timeline (For you and Following) leaves out
@@ -18,7 +19,7 @@
    why it runs in the page's world, at document_start. */
 (() => {
   "use strict";
-  const VERSION = "0.5.0";
+  const VERSION = "0.6.0";
   const HOUR = 3600e3;
   const MAX_AGE = 72 * HOUR;
   const FORGET = 14 * 24 * HOUR; // read posts are remembered this long
@@ -52,13 +53,16 @@
       localStorage.setItem(KEY, JSON.stringify(S));
     } catch {}
   }
+  let running = false; // false in a copy that steps aside (see below)
   function adopt() {
     const disk = read();
     S.on = disk.on;
     S.min = disk.min;
     Object.assign(S.seen, disk.seen);
     minimal();
+    if (!running) return;
     paint();
+    homeTabs();
   }
   addEventListener("storage", (e) => e.key === KEY && adopt()); // another tab
   addEventListener("pagehide", () => saveTimer && save());
@@ -81,6 +85,7 @@
     html[data-subfeed-min] subfeed-switch ~ *,
     html[data-subfeed-min] header[role="banner"] h1,
     html[data-subfeed-min] [data-testid="SideNav_AccountSwitcher_Button"],
+    html[data-subfeed-min] [data-subfeed-tabs],
     html[data-subfeed-min] ${MENU} :is(a, button):not(${KEEP}) { display: none !important; }
   `);
   function minimal() {
@@ -105,6 +110,7 @@
     return;
   }
   Object.defineProperty(window, "__subfeed", { value: VERSION });
+  running = true;
 
   // ---------- the filter
   const stats = { responses: 0, read: 0, old: 0 };
@@ -554,6 +560,7 @@
   function toggleMin() {
     save({ min: !S.min });
     minimal();
+    homeTabs();
     paint();
     record();
   }
@@ -613,7 +620,10 @@
   let column = null;
   let layoutTimer = 0;
   const columnObs = new MutationObserver(() => safely(placeCard));
-  new MutationObserver(() => column?.isConnected || safely(placeCard)).observe(document, { childList: true, subtree: true });
+  new MutationObserver(() => {
+    if (!column?.isConnected) safely(placeCard);
+    if (S.min && !(tabsDone && tabBar?.isConnected)) safely(homeTabs);
+  }).observe(document, { childList: true, subtree: true });
   function safely(fn) {
     try {
       fn();
@@ -639,13 +649,53 @@
     paint();
     record();
   }
+  // ---------- Minimalist on Home: X's tab bar (For you, Following, +) is
+  // hidden, and Following is the timeline shown. X remembers which tab was
+  // last open, so Following is clicked once, as the bar comes in (before it
+  // is painted, and before X has posts to draw), and X opens on it after that.
+  let tabBar = null;
+  let tabsDone = false;
+  let tabClick = 0;
+  function homeTabs() {
+    tabsDone = false;
+    if (!S.min || location.pathname !== "/home") return;
+    const list = document.querySelector('[data-testid="primaryColumn"] [role="tablist"]');
+    if (!list) return;
+    if (!tabBar?.isConnected || !tabBar.contains(list)) {
+      tabBar = barOf(list);
+      tabBar?.setAttribute("data-subfeed-tabs", "");
+    }
+    // For you and Following always come first; pinned lists can only follow.
+    const following = list.querySelector('[role="tab"][data-pinned-timeline="following"]') || list.querySelectorAll('[role="tab"]')[1];
+    if (!following) return;
+    if (following.getAttribute("aria-selected") === "true") return (tabsDone = !!tabBar);
+    if (Date.now() - tabClick < 1000) return;
+    tabClick = Date.now();
+    following.click();
+  }
+  // The bar: the tab list's highest ancestor no taller than the list (and its
+  // border). That is the whole header on a wide window, and only the tab row
+  // under X's top bar on a narrow one. Never anything holding posts.
+  function barOf(list) {
+    const height = list.getBoundingClientRect().height;
+    if (!height) return null;
+    let bar = list;
+    for (let up = 0; up < 12; up++) {
+      const parent = bar.parentElement;
+      if (!parent || parent.matches('[data-testid="primaryColumn"]') || parent.querySelector('section, [role="progressbar"], [data-testid="cellInnerDiv"]')) break;
+      if (parent.getBoundingClientRect().height > height + 4) break;
+      bar = parent;
+    }
+    return bar;
+  }
+
   // Written only by a tab that can see them (background tabs draw neither),
   // so another X tab never clears what was seen.
   let recorded = "";
   function record() {
     layoutTimer ||= setTimeout(() => {
       layoutTimer = 0;
-      const seen = { column: layout(), menu: menu() };
+      const seen = { column: layout(), menu: menu(), tabs: tabs() };
       const next = JSON.stringify(seen);
       if ((!seen.column && !seen.menu) || next === recorded) return;
       recorded = next;
@@ -665,6 +715,16 @@
     });
     const h = (sel) => Math.round(document.querySelector(sel)?.getBoundingClientRect().height ?? -1);
     return `logo/${h('header[role="banner"] h1')} ${items.join(" ")} post/${h('[data-testid="SideNav_NewTweet_Button"]')} account/${h('[data-testid="SideNav_AccountSwitcher_Button"]')}`;
+  }
+
+  // Home's tabs, for the log: which one is open, and the hidden bar's height.
+  function tabs() {
+    const list = location.pathname === "/home" && document.querySelector('[data-testid="primaryColumn"] [role="tablist"]');
+    if (!list) return "";
+    const all = [...list.querySelectorAll('[role="tab"]')];
+    let up = 0;
+    for (let el = list; tabBar && el && el !== tabBar; el = el.parentElement) up++;
+    return `tabs/${all.length} open/${all.findIndex((t) => t.getAttribute("aria-selected") === "true")} bar/${tabBar?.contains(list) ? up : -1}/${Math.round(tabBar?.getBoundingClientRect().height ?? -1)}`;
   }
 
   // What the column holds, for the log: each block's kind and height (0 = hidden).
@@ -717,6 +777,7 @@
       minimal();
       scan();
       placeCard();
+      homeTabs();
       caughtUp();
       record();
     });

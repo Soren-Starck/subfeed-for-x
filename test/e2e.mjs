@@ -210,6 +210,59 @@ s = await state();
 check("log: the column's layout is recorded", /^search\/\d+ empty\/64 switches\/\d+ .*nav\[Footer\]\/0$/.test(s.seen?.column || ""), s.seen?.column);
 check("log: the left menu is recorded", /^logo\/0 AppTabBar_Home_Link:keep\/[1-9]\d* AppTabBar_Explore_Link:hide\/0 .*AppTabBar_Profile_Link:keep\/[1-9]\d* AppTabBar_More_Menu:hide\/0 post\/[1-9]\d* account\/0$/.test(s.seen?.menu || ""), s.seen?.menu);
 
+// 6b. Minimalist on Home: X's tab bar is never drawn, and Following is the
+// timeline shown, whatever tab X remembers. X then remembers Following.
+await page.send("Page.addScriptToEvaluateOnNewDocument", {
+  source: `window.__tabsSeen = 0;
+    window.__forYouSeen = 0;
+    (function frame() {
+      const list = document.querySelector("[role=tablist]");
+      if (list && list.getBoundingClientRect().height > 0) window.__tabsSeen++;
+      if (document.querySelector('[data-tab="for-you"] article')) window.__forYouSeen++;
+      requestAnimationFrame(frame);
+    })();`,
+});
+const tabState = () =>
+  page.eval(`JSON.stringify({ tabsSeen: window.__tabsSeen, forYouSeen: window.__forYouSeen, ops: window.__mock.ops.join(","),
+    open: [...document.querySelectorAll("[role=tab]")].findIndex((t) => t.getAttribute("aria-selected") === "true"),
+    bar: Math.round(document.querySelector("[role=tablist]")?.getBoundingClientRect().height ?? -1),
+    top: Math.round(document.querySelector(".head .top")?.getBoundingClientRect().height ?? -1),
+    posts: document.querySelectorAll("[data-tab=following] article").length, remembered: localStorage.getItem("mock.tab"),
+    noReload: window.__noReload === 1, log: JSON.parse(localStorage.getItem("subfeed.layout") || "null")?.tabs })`).then(JSON.parse);
+const openHome = async (tab, min, query = "") => {
+  await page.goto(URL_, 300);
+  await setStore(false, {}, min);
+  await page.eval(`localStorage.setItem("mock.tab", "${tab}"); 1`);
+  await page.goto(URL_ + query, 2500);
+  return tabState();
+};
+let t = await openHome("for-you", false);
+check("tabs control: with Minimalist off, the tab bar is drawn and For you stays open", t.tabsSeen > 0 && t.bar > 0 && t.open === 0 && t.forYouSeen > 0 && t.ops === "HomeTimeline", JSON.stringify(t));
+t = await openHome("for-you", true);
+check("tabs: For you remembered, Minimalist opens Following before any post is drawn", t.open === 1 && t.forYouSeen === 0 && t.posts >= 10 && t.ops === "HomeTimeline,HomeLatestTimeline", `open=${t.open} forYouDrawn=${t.forYouSeen} posts=${t.posts} ops=${t.ops}`);
+check("tabs: the tab bar is never drawn", t.tabsSeen === 0 && t.bar === 0, `frames=${t.tabsSeen} bar=${t.bar}`);
+check("tabs: X now remembers Following", t.remembered === "following", t.remembered);
+await page.goto(URL_, 2500);
+t = await tabState();
+check("tabs: next load asks X for Following only", t.ops === "HomeLatestTimeline" && t.open === 1 && t.tabsSeen === 0, `ops=${t.ops}`);
+t = await openHome("list", true);
+check("tabs: a pinned list remembered, Following opens", t.open === 1 && t.tabsSeen === 0 && t.remembered === "following", `open=${t.open} remembered=${t.remembered}`);
+t = await openHome("for-you", true, "?narrow=1");
+check("tabs, narrow window: X's top bar stays, only the tab row goes", t.top > 0 && t.bar === 0 && t.tabsSeen === 0 && t.open === 1, `top=${t.top} bar=${t.bar} open=${t.open}`);
+t = await openHome("for-you", false);
+await clickMin();
+await sleep(600);
+t = await tabState();
+check("tabs: turning Minimalist on with For you open switches to Following, no reload", t.open === 1 && t.bar === 0 && t.noReload && t.posts >= 10, `open=${t.open} bar=${t.bar} noReload=${t.noReload}`);
+await clickMin();
+await sleep(300);
+t = await tabState();
+check("tabs: turning Minimalist off shows the tab bar again, on Following", t.bar > 0 && t.open === 1 && t.noReload, `bar=${t.bar} open=${t.open}`);
+await openHome("following", true);
+await sleep(2000);
+t = await tabState();
+check("log: Home's tabs are recorded", /^tabs\/3 open\/1 bar\/\d+\/0$/.test(t.log || ""), t.log);
+
 // 7. Another copy already in the page: after the extension reloads, Chromium
 // can keep injecting its previous copy into X tabs that were open, ahead of the
 // new one. The tab must not freeze, filter twice or show two cards.

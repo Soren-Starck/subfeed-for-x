@@ -41,7 +41,7 @@ To try a change on the real X, load the `extension` folder unpacked (see the REA
 node test/run.mjs
 ```
 
-It starts the stand-in on a free port and a headless browser with a throwaway profile, runs 37 end-to-end checks and prints `ALL PASS` (or what failed). It takes about a minute. `HEADED=1` shows the browser, `CHROME=/path/to/chrome` picks the browser, and `SHOTS=1` also refreshes the screenshots in `docs/`.
+It starts the stand-in on a free port and a headless browser with a throwaway profile, runs 47 end-to-end checks and prints `ALL PASS` (or what failed). It takes about a minute. `HEADED=1` shows the browser, `CHROME=/path/to/chrome` picks the browser, and `SHOTS=1` also refreshes the screenshots in `docs/`.
 
 The same run happens on every pull request.
 
@@ -52,6 +52,7 @@ X ships its web app often. The usual breakages:
 - **Never twice stops filtering** (the switch says "Not filtering: X changed how it loads posts"). Check the timeline requests in DevTools' Network tab: the operation names (`HomeTimeline`, `HomeLatestTimeline`), the response shape (`data.home.home_timeline_urt.instructions`), or the way X reads the response (`XMLHttpRequest` and `responseText`) may have changed.
 - **Minimalist misses a block or a menu item.** X renamed a `data-testid` or a link. The selectors are at the top of `page.js` (`KEEP`, `MENU` and the stylesheet under them).
 - **The switches don't appear.** X changed its right column; see `spot()` in `page.js`.
+- **Home's tab bar shows, or Minimalist doesn't land on Following.** X changed its tabs; see `homeTabs()` and `barOf()` in `page.js`.
 
 `localStorage["subfeed.log"]` and `localStorage["subfeed.layout"]` on x.com show what the extension saw. Paste them into an issue; they hold no post text or user names.
 
