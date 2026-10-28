@@ -1,0 +1,197 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Home / X (stand-in)</title>
+<!-- page.js first, as document_start would run it -->
+<script src="/src/page.js"></script>
+<style>
+  :root { --bg: #fff; --fg: #0f1419; --muted: #536471; --line: #eff3f4; }
+  body.dim { --bg: rgb(21, 32, 43); --fg: #f7f9f9; --muted: #8b98a5; --line: #38444d; }
+  body.dark { --bg: rgb(0, 0, 0); --fg: #e7e9ea; --muted: #71767b; --line: #2f3336; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font-family: -apple-system, system-ui, sans-serif; font-size: 15px; }
+  .wrap { display: flex; justify-content: center; gap: 30px; }
+  header[role=banner] { width: 160px; display: flex; flex-direction: column; gap: 4px; padding-top: 6px; }
+  header[role=banner] h1 { margin: 0 0 8px; font-size: 28px; }
+  header[role=banner] a, header[role=banner] button { all: unset; display: block; padding: 10px 0; color: var(--fg); font-size: 18px; cursor: pointer; }
+  header[role=banner] nav { display: flex; flex-direction: column; }
+  header[role=banner] .post { margin-top: 12px; padding: 12px; text-align: center; border-radius: 999px; background: var(--fg); color: var(--bg); font-weight: 700; }
+  [data-testid=primaryColumn] { width: 600px; min-height: 100vh; border-left: 1px solid var(--line); border-right: 1px solid var(--line); }
+  [data-testid=sidebarColumn] { width: 350px; padding-top: 6px; }
+  .sticky { position: sticky; top: 0; }
+  .tabs { display: flex; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--bg); z-index: 1; }
+  .tabs [role=tab] { flex: 1; text-align: center; padding: 16px; font-weight: 600; color: var(--muted); }
+  .tabs [aria-selected=true] { color: var(--fg); }
+  [data-testid=cellInnerDiv] { border-bottom: 1px solid var(--line); padding: 12px 16px; }
+  article { display: flex; gap: 12px; }
+  .av { width: 40px; height: 40px; border-radius: 50%; background: var(--line); flex: none; }
+  .ctx { color: var(--muted); font-size: 13px; margin-bottom: 2px; }
+  .meta a, .meta span.h { color: var(--muted); text-decoration: none; }
+  .txt { margin-top: 2px; white-space: pre-wrap; }
+  form[role=search] input { width: 100%; box-sizing: border-box; border-radius: 999px; border: 1px solid var(--line); background: transparent; color: var(--fg); padding: 12px 20px; font: inherit; margin-bottom: 12px; }
+  section { border: 1px solid var(--line); border-radius: 16px; padding: 12px 16px; margin-bottom: 16px; }
+  section h2 { margin: 0 0 8px; font-size: 20px; }
+  .end { padding: 32px; text-align: center; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <!-- X's left menu, as of October 2026 -->
+  <header role="banner">
+    <h1 role="heading"><a href="/home" aria-label="X">𝕏</a></h1>
+    <nav aria-label="Primary" role="navigation">
+      <a href="/home" data-testid="AppTabBar_Home_Link" aria-label="Home">Home</a>
+      <a href="/explore" data-testid="AppTabBar_Explore_Link" aria-label="Search and explore">Explore</a>
+      <a href="/notifications" data-testid="AppTabBar_Notifications_Link" aria-label="Notifications">Notifications</a>
+      <a href="/i/connect_people" aria-label="Follow">Follow</a>
+      <a href="/i/chat" data-testid="AppTabBar_DirectMessage_Link" aria-label="Chat">Chat</a>
+      <a href="/i/calls" aria-label="Calls">Calls</a>
+      <a href="/i/grok" aria-label="Grok">Grok</a>
+      <a href="/i/premium_sign_up" data-testid="premium-signup-tab" aria-label="Premium">Premium</a>
+      <a href="/i/bookmarks" aria-label="History">History</a>
+      <a href="/i/jf/creators/studio" aria-label="Creator Studio">Creator Studio</a>
+      <a href="/compose/articles" aria-label="Articles">Articles</a>
+      <a href="/you" data-testid="AppTabBar_Profile_Link" aria-label="Profile">Profile</a>
+      <button data-testid="AppTabBar_More_Menu" aria-label="More menu items">More</button>
+    </nav>
+    <a href="/compose/post" data-testid="SideNav_NewTweet_Button" aria-label="Post" class="post">Post</a>
+    <button data-testid="SideNav_AccountSwitcher_Button" aria-label="Account menu">You</button>
+  </header>
+  <main data-testid="primaryColumn">
+    <div role="tablist" class="tabs"><a role="tab" aria-selected="false">For you</a><a role="tab" aria-selected="true">Following</a></div>
+    <div id="list"></div>
+    <div id="sentinel" style="height: 1px"></div>
+    <div id="spinner" class="end">Loading…</div>
+  </main>
+  <div data-testid="sidebarColumn"><div class="sticky"><div aria-label="Trending"><div id="side">
+    <div style="position: fixed; top: 0; width: 350px; padding-top: 6px; background: var(--bg); z-index: 2"><div><form role="search"><input placeholder="Search"></form></div></div>
+    <div style="height: 64px"></div>
+    <nav id="foot" aria-label="Footer" style="color: var(--muted); font-size: 13px">Terms · Privacy · Cookie</nav>
+  </div></div></div></div>
+</div>
+<script>
+  // A small stand-in for X's client: same XHR pattern (onreadystatechange,
+  // readyState 4, responseText), same bottom-cursor and TerminateTimeline rules.
+  const theme = new URLSearchParams(location.search).get("theme");
+  if (theme) document.body.className = theme;
+  // Like X, the column's blocks come in as they load, after the search bar.
+  {
+    const side = document.getElementById("side");
+    const add = (html, id) => {
+      const div = document.createElement("div");
+      div.id = id;
+      div.innerHTML = html;
+      side.insertBefore(div, document.getElementById("foot"));
+    };
+    setTimeout(() => add('<div style="border: 1px dashed var(--line); border-radius: 16px; padding: 12px 16px; margin-bottom: 16px"><h2 style="margin: 0 0 8px; font-size: 20px">Today’s News</h2><div style="color: var(--muted)">Local Bakery Wins Regional Bread Award…</div></div>', "news"), 150);
+    setTimeout(() => add('<section><h2>What\'s happening</h2><div style="color: var(--muted)">Trending · #WebDev</div></section>', "trending"), 400);
+  }
+  setTimeout(() => {
+    const side = document.getElementById("side");
+    const wtf = document.createElement("div");
+    wtf.innerHTML = '<aside><h2>Who to follow</h2><div style="color: var(--muted)">@example</div></aside>';
+    side.insertBefore(wtf, document.getElementById("foot"));
+    const t = document.getElementById("trending");
+    side.insertBefore(t.cloneNode(true), wtf);
+    t.remove();
+  }, 1200);
+  const M = (window.__mock = { entries: [], atBottom: false, loading: false, requests: 0, inserted: 0, removed: 0 });
+
+  // Like X's HttpClient: open, timeout, credentials, headers (with a fresh
+  // transaction id), onreadystatechange set before send, POST body for Following.
+  function api(cursor) {
+    return new Promise((resolve) => {
+      const xhr = new XMLHttpRequest();
+      // X's network monitoring reads every response first, in its own listener.
+      xhr.addEventListener("load", () => (M.peeked = (M.peeked || 0) + (xhr.responseText ? 1 : 0)));
+      const variables = { count: 20, includePromotedContent: true, latestControlAvailable: true, requestContext: "launch", seenTweetIds: [], ...(cursor ? { cursor } : {}) };
+      xhr.open("POST", location.origin + "/i/api/graphql/MOCKqid/HomeLatestTimeline");
+      xhr.timeout = 0;
+      xhr.withCredentials = true;
+      const headers = { authorization: "Bearer mock", "content-type": "application/json", "x-client-transaction-id": "tid-" + Math.random().toString(36).slice(2), "x-twitter-active-user": "yes" };
+      Object.keys(headers).forEach((k) => xhr.setRequestHeader(k, headers[k]));
+      if (!cursor) {
+        // X's first load goes through its newer fetch stand-in: XHR + onload + Response.
+        xhr.onload = () => resolve(new Response(xhr.responseText, { status: xhr.status }).json());
+        xhr.onerror = () => resolve(null);
+      } else {
+        xhr.onreadystatechange = function () {
+          if (xhr.readyState !== 4) return;
+          xhr.getAllResponseHeaders();
+          resolve(JSON.parse(xhr.responseText));
+        };
+      }
+      M.requests++;
+      xhr.send(JSON.stringify({ variables, features: { rweb_video_screen_enabled: false }, queryId: "MOCKqid" }));
+    });
+  }
+  const bottomCursor = () => {
+    const last = M.entries[M.entries.length - 1];
+    return last?.content?.cursorType === "Bottom" ? last : null;
+  };
+  function apply(json, used) {
+    for (const ins of json.data.home.home_timeline_urt.instructions) {
+      if (ins.type === "TimelineAddEntries") {
+        M.entries = M.entries.filter((e) => e !== used);
+        M.entries.push(...ins.entries.filter((e) => !(e.content.cursorType === "Top" && M.entries.some((x) => x.content.cursorType === "Top"))));
+      } else if (ins.type === "TimelineTerminateTimeline" && ins.direction === "Bottom") {
+        M.atBottom = true;
+      }
+    }
+    render();
+  }
+  const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
+  const unwrap = (r) => (r?.__typename === "TweetWithVisibilityResults" ? r.tweet : r);
+  function cell(ic) {
+    const t = unwrap(ic.tweet_results.result);
+    const o = unwrap(t.legacy.retweeted_status_result?.result) || t;
+    const u = o.core.user_results.result.legacy;
+    const ctx = o !== t ? `<div class="ctx">${esc(t.core.user_results.result.legacy.name)} reposted</div>` : ic.promotedMetadata ? `<div class="ctx">Ad</div>` : "";
+    const hue = [...u.screen_name].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 7);
+    return `<div data-testid="cellInnerDiv">${ctx}<article data-testid="tweet" tabindex="0"><div class="av" style="background: hsl(${hue} 45% 72%)"></div><div style="flex:1">
+      <div class="meta" data-testid="User-Name"><b>${esc(u.name)}</b> <span class="h">@${esc(u.screen_name)}</span> · <a href="/${esc(u.screen_name)}/status/${o.rest_id}"><time datetime="${new Date(o.legacy.created_at).toISOString()}">${new Date(o.legacy.created_at).toLocaleString()}</time></a></div>
+      <div class="txt" data-testid="tweetText">${esc(o.legacy.full_text)}</div></div></article></div>`;
+  }
+  const rendered = new Set();
+  function render() {
+    const html = [];
+    for (const e of M.entries) {
+      const c = e.content;
+      if (c.itemContent) html.push(cell(c.itemContent));
+      else if (c.items) for (const it of c.items) html.push(cell(it.item.itemContent));
+    }
+    // X's empty timeline: no posts means "Welcome to X!", and no more paging.
+    if (!html.length) html.push(`<div data-testid="emptyState"><div><h2 data-testid="empty_state_header_text"><span>Welcome to X!</span></h2>
+      <div data-testid="empty_state_body_text"><span>This is the best place to see what’s happening in your world. Find some people and topics to follow now.</span></div>
+      <a data-testid="empty_state_button_text" role="button"><span>Let’s go!</span></a></div></div>`);
+    document.getElementById("list").innerHTML = html.join("");
+    document.getElementById("spinner").textContent = M.atBottom || !bottomCursor() ? "" : "Loading…";
+    const now = new Set([...document.querySelectorAll("article a[href*='/status/']")].map((a) => a.getAttribute("href")));
+    for (const h of now) if (!rendered.has(h)) M.inserted++;
+    for (const h of rendered) if (!now.has(h)) M.removed++;
+    rendered.clear();
+    for (const h of now) rendered.add(h);
+  }
+  async function fetchBottom() {
+    if (M.loading || M.atBottom || !document.querySelector("article")) return;
+    const c = bottomCursor();
+    if (!c) return;
+    M.loading = true;
+    apply(await api(c.content.value), c);
+    M.loading = false;
+    near();
+  }
+  const near = () => {
+    const r = document.getElementById("sentinel").getBoundingClientRect();
+    if (r.top < innerHeight + 1200) fetchBottom();
+  };
+  addEventListener("scroll", near, { passive: true });
+  (async () => {
+    M.loading = true;
+    apply(await api(null), null);
+    M.loading = false;
+    near();
+  })();
+</script>
+</body>
+</html>

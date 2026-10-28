@@ -1,0 +1,35 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Check the tag matches the extension's version
+        run: |
+          version=$(node -p 'require("./extension/manifest.json").version')
+          test "v$version" = "$GITHUB_REF_NAME" || { echo "Tag $GITHUB_REF_NAME, manifest $version"; exit 1; }
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      - name: Test
+        run: node test/run.mjs
+      - name: Zip the extension
+        run: |
+          mkdir -p out && cp -R extension out/subfeed-for-x
+          (cd out && zip -r "../subfeed-for-x-$VERSION.zip" subfeed-for-x)
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes="docs/releases/$GITHUB_REF_NAME.md"
+          if [ -f "$notes" ]; then set -- --notes-file "$notes"; else set -- --generate-notes; fi
+          gh release create "$GITHUB_REF_NAME" "subfeed-for-x-$VERSION.zip" --title "SubFeed for X $VERSION" "$@"

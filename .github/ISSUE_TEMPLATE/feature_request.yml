@@ -1,0 +1,20 @@
+name: Idea
+description: Suggest a change.
+labels: [idea]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The extension is deliberately small: two switches and no other interface. Ideas that keep it that way are the easiest to take; ideas that add interface need a strong case.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What bothers you on X today
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you'd change
+    validations:
+      required: true

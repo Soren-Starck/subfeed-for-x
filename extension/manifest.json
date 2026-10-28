@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "SubFeed for X",
+  "version": "0.5.0",
+  "description": "Never twice: X's home timeline without the posts you've already read or anything older than 72 hours. Minimalist: X without news, trends, suggestions or menu extras.",
+  "homepage_url": "https://github.com/Soren-Starck/subfeed-for-x",
+  "minimum_chrome_version": "111",
+  "icons": { "128": "icons/icon-128.png" },
+  "background": { "service_worker": "src/background.js" },
+  "content_scripts": [
+    {
+      "matches": ["https://x.com/*"],
+      "js": ["src/page.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://x.com/*"],
+      "js": ["src/update.js"],
+      "run_at": "document_start"
+    }
+  ]
+}

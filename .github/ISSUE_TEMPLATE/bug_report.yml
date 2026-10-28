@@ -1,0 +1,46 @@
+name: Bug report
+description: Something on X looks wrong with the extension on, or a switch doesn't work.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, what you saw. A screenshot helps.
+    validations:
+      required: true
+  - type: dropdown
+    id: switch
+    attributes:
+      label: Which switch
+      options:
+        - Never twice
+        - Minimalist
+        - Both
+        - Neither (the switches are missing)
+    validations:
+      required: true
+  - type: input
+    id: browser
+    attributes:
+      label: Browser and version
+      placeholder: Chrome 141, Brave 1.84, Arc...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Extension version
+      description: Shown on your browser's extensions page.
+      placeholder: "0.5.0"
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: The extension's log
+      description: |
+        On x.com, open DevTools (F12, or Cmd+Option+I on a Mac), go to the Console and run:
+        `copy(JSON.stringify({ log: JSON.parse(localStorage["subfeed.log"] || "null"), layout: JSON.parse(localStorage["subfeed.layout"] || "null") }))`
+        then paste here. It holds counts and entry types only, no post text or user names.
+      render: json
