@@ -19,7 +19,7 @@
    why it runs in the page's world, at document_start. */
 (() => {
   "use strict";
-  const VERSION = "0.6.0";
+  const VERSION = "0.7.0";
   const HOUR = 3600e3;
   const MAX_AGE = 72 * HOUR;
   const FORGET = 14 * 24 * HOUR; // read posts are remembered this long
@@ -65,6 +65,8 @@
     homeTabs();
   }
   addEventListener("storage", (e) => e.key === KEY && adopt()); // another tab
+  // sync.js merged in posts read on another browser or device
+  addEventListener("message", (e) => e.source === window && e.data?.subfeed === "adopt" && adopt());
   addEventListener("pagehide", () => saveTimer && save());
 
   // ---------- Minimalist: the right column keeps its search bar and the

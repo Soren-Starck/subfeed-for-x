@@ -263,7 +263,66 @@ await sleep(2000);
 t = await tabState();
 check("log: Home's tabs are recorded", /^tabs\/3 open\/1 bar\/\d+\/0$/.test(t.log || ""), t.log);
 
-// 7. Another copy already in the page: after the extension reloads, Chromium
+// 7. Sync: posts read on another browser or device, merged in by sync.js
+// before X's first timeline arrives, are left out here too; posts read here
+// go to the server. The server is a stand-in kept in sessionStorage.
+const SYNC_SRC = fs.readFileSync(path.join(root, "extension/src/sync.js"), "utf8");
+const FAKE_SERVER = `globalThis.__subfeedSyncTransport = async (msg) => {
+  const srv = JSON.parse(sessionStorage.getItem("fakeServer") || '{"seq":0,"rows":[]}');
+  const seen = {};
+  for (const r of srv.rows) if (r.seq > msg.since) seen[r.id] = r.t;
+  const fresh = Object.entries(msg.seen).filter(([id]) => !srv.rows.some((r) => r.id === id));
+  if (fresh.length) srv.seq++;
+  for (const [id, t] of fresh) srv.rows.push({ id, t, seq: srv.seq });
+  srv.calls = (srv.calls || 0) + 1;
+  sessionStorage.setItem("fakeServer", JSON.stringify(srv));
+  return { ok: true, seq: srv.seq, seen };
+};`;
+{
+  const elsewhere = (await dev("/__ids?upto=6")).slice(0, 5);
+  await page.goto(URL_, 300);
+  await setStore(true);
+  await page.eval(`sessionStorage.setItem("fakeServer", ${JSON.stringify(JSON.stringify({ seq: 1, rows: elsewhere.map((id) => ({ id, t: Date.now() - 60e3, seq: 1 })) }))}); 1`);
+  await dev("/__reset");
+  const { identifier } = await page.send("Page.addScriptToEvaluateOnNewDocument", { source: FAKE_SERVER + "\n" + SYNC_SRC });
+  await load(2500);
+  s = await state();
+  const sync = () => page.eval(`localStorage.getItem("subfeed.sync") + "|" + sessionStorage.getItem("fakeServer")`).then((v) => v.split("|").map((x) => JSON.parse(x)));
+  let [cursor, srv] = await sync();
+  const shownAlone = s.ids.filter((id) => elsewhere.includes(id) && !s.inModule.includes(id));
+  check("sync: posts read elsewhere merged in before X draws", elsewhere.every((id) => id in (s.store?.seen || {})) && cursor?.since === 1 && cursor?.got === 5, JSON.stringify(cursor));
+  check("sync: posts read elsewhere not shown here", shownAlone.length === 0 && s.ids.length >= 10, `shown=${shownAlone.length} posts=${s.ids.length}`);
+  for (let i = 0; i < 6; i++) {
+    await page.eval("window.scrollBy(0, 420); 1");
+    await sleep(1300);
+  }
+  await sleep(2600); // page.js saves
+  await page.eval(`document.dispatchEvent(new Event("visibilitychange")); 1`);
+  await sleep(500);
+  [cursor, srv] = await sync();
+  const readHere = Object.keys((await state()).store?.seen || {}).filter((id) => !elsewhere.includes(id));
+  const sent = srv.rows.filter((r) => r.seq > 1).map((r) => r.id);
+  check("sync: posts read here sent to the server", readHere.length >= 5 && readHere.every((id) => sent.includes(id)), `read here=${readHere.length} sent=${sent.length}`);
+  check("sync: posts read elsewhere not sent back", !sent.some((id) => elsewhere.includes(id)), sent.filter((id) => elsewhere.includes(id)).join(","));
+  check("sync: cursor follows the server", cursor?.since === srv.seq && cursor?.pushed > 0, `since=${cursor?.since} seq=${srv.seq}`);
+  const calls = srv.calls;
+  await page.eval(`document.dispatchEvent(new Event("visibilitychange")); 1`);
+  await sleep(300);
+  [cursor, srv] = await sync();
+  check("sync: nothing new, nothing sent twice", srv.rows.length === elsewhere.length + sent.length && srv.calls === calls + 1, `rows=${srv.rows.length} calls=${srv.calls}`);
+  await page.send("Page.removeScriptToEvaluateOnNewDocument", { identifier });
+  // No server set up: one call, then it stops asking.
+  const { identifier: offId } = await page.send("Page.addScriptToEvaluateOnNewDocument", {
+    source: `globalThis.__subfeedSyncTransport = async () => { window.__offCalls = (window.__offCalls || 0) + 1; return { ok: false, off: true }; };\n` + SYNC_SRC,
+  });
+  await load(800);
+  await page.eval(`document.dispatchEvent(new Event("visibilitychange")); 1`);
+  await sleep(200);
+  check("sync off: asks once, then stops", Number(await page.eval("window.__offCalls")) === 1, String(await page.eval("window.__offCalls")));
+  await page.send("Page.removeScriptToEvaluateOnNewDocument", { identifier: offId });
+}
+
+// 8. Another copy already in the page: after the extension reloads, Chromium
 // can keep injecting its previous copy into X tabs that were open, ahead of the
 // new one. The tab must not freeze, filter twice or show two cards.
 const OLD = fs.readFileSync(path.join(root, "test/fixtures/page-0.4.js"), "utf8"); // v0.4, as shipped

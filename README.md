@@ -54,12 +54,28 @@ Firefox and Safari are not supported yet. If you want to port it, see [CONTRIBUT
 
 When the browser window is too narrow, X drops its right column, and the switches go with it. Widen the window to see them again.
 
+### Sync (optional)
+
+If you read X in more than one browser or on more than one computer, Never twice can share what you have read, so a post read in one place stays out of the others. This needs a small server of your own that every browser can reach; the extension never talks to anything else. It is off unless you set it up.
+
+1. Run a server that answers `POST /v1/x/seen` (described below), behind a bearer token.
+2. Put a `sync.json` file next to `manifest.json` in the extension folder:
+   ```json
+   { "url": "https://your-server.example", "token": "your-token" }
+   ```
+3. Reload the extension in `chrome://extensions`.
+
+Every 30 seconds while an X tab is in front, and whenever you switch to or away from it, the extension sends the ids of posts read since its last call and gets back those read elsewhere. The server sees post ids and the time each was read, nothing else.
+
+The call takes `{"since": <cursor>, "seen": {"<post id>": <ms epoch>, ...}}` and answers `{"seq": <new cursor>, "seen": {...}}` with the posts other places sent after `since` (the first call sends 0). Keep posts 14 days, as the extension does. `sync.json` is in `.gitignore`, so a clone keeps it out of git.
+
 ## Privacy
 
 - The extension asks for no permissions and runs only on `x.com`.
-- It sends nothing anywhere. It makes no requests of its own, except to repeat X's own timeline request one page further down, to your X session, when the pages so far were all read.
+- It sends nothing anywhere unless you set up [Sync](#sync-optional), and then only read post ids, to your own server. Otherwise it makes no requests of its own, except to repeat X's own timeline request one page further down, to your X session, when the pages so far were all read.
 - What it remembers stays in your browser, in x.com's local storage:
   - `subfeed`: the two switches, and the ids of posts you read in the last 14 days (older ones are forgotten);
+  - `subfeed.sync`: with Sync on, where this browser is in the server's list, and how many posts the last call sent and got;
   - `subfeed.log` and `subfeed.layout`: a short log of the last timeline responses and of what the switches hid, for bug reports. It holds counts and entry types, never what a post says or who wrote it.
 
 To start over, remove those keys in DevTools (Application, Local storage, `https://x.com`).
@@ -68,7 +84,7 @@ To start over, remove those keys in DevTools (Application, Local storage, `https
 
 X's web app loads timelines with `XMLHttpRequest` and reads `responseText`. The extension runs in the page itself at `document_start` and wraps those reads for the `HomeTimeline` and `HomeLatestTimeline` GraphQL calls, removing read and old posts before X's code sees them. Minimalist is one stylesheet, keyed to X's `data-testid` attributes and links, that the extension adds to the page before X draws it, plus one click on Home's Following tab when another tab is open.
 
-All of it is in [`extension/src/page.js`](extension/src/page.js), about 740 commented lines with no dependencies and no build step.
+All of it is in [`extension/src/page.js`](extension/src/page.js), about 800 commented lines with no dependencies and no build step. The optional sync is [`extension/src/sync.js`](extension/src/sync.js), which talks to the server through [`extension/src/background.js`](extension/src/background.js).
 
 X changes its web app often. If it changes how timelines load, the switch's subtitle says "Not filtering: X changed how it loads posts". Please [open an issue](https://github.com/Soren-Starck/subfeed-for-x/issues/new/choose) when you see that, or when Minimalist misses something.
 
