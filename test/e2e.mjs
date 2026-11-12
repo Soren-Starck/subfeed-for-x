@@ -28,11 +28,12 @@ const state = () =>
     const ages = ids.map((id) => (Date.now() - (Number(BigInt(id) >> 22n) + 1288834974657)) / 3600e3);
     const host = document.querySelector("subfeed-switch");
     const ads = [...document.querySelectorAll(".ctx")].filter((c) => c.textContent === "Ad").length;
-    const inModule = M.entries.filter((e) => e.content.items).flatMap((e) => e.content.items.map((i) => { const t = i.item.itemContent.tweet_results.result; return t.legacy.retweeted_status_result?.result?.tweet?.rest_id || t.rest_id; }));
+    const inModule = M.entries.filter((e) => e.content.items).flatMap((e) => e.content.items.map((i) => { const t = i.item.itemContent.tweet_results?.result; return t && (t.legacy.retweeted_status_result?.result?.tweet?.rest_id || t.rest_id); })).filter(Boolean);
     const reposted = M.entries.flatMap((e) => (e.content.itemContent ? [e.content.itemContent] : (e.content.items || []).map((i) => i.item.itemContent)))
       .map((ic) => ic?.tweet_results?.result?.legacy?.retweeted_status_result?.result?.tweet?.rest_id).filter(Boolean);
     const adIds = M.entries.filter((e) => e.entryId.startsWith("promoted")).map((e) => e.content.itemContent.tweet_results.result.rest_id);
-    return { ids, ages, ads, inModule, reposted, adIds, requests: M.requests, atBottom: M.atBottom, inserted: M.inserted, removed: M.removed,
+    const suggested = document.querySelectorAll(".suggest").length;
+    return { ids, ages, ads, suggested, inModule, reposted, adIds, requests: M.requests, atBottom: M.atBottom, inserted: M.inserted, removed: M.removed,
       card: host ? { checked: host.shadowRoot.querySelector("button").getAttribute("aria-checked"), sub: host.shadowRoot.querySelector(".sub").textContent,
         prev: host.previousElementSibling?.querySelector("form[role=search]") ? "search" : host.previousElementSibling?.previousElementSibling?.querySelector("form[role=search]") ? "search+spacer" : host.previousElementSibling?.tagName,
         next: host.nextElementSibling?.textContent.trim().slice(0, 12), y: Math.round(host.getBoundingClientRect().y) } : null,
@@ -188,7 +189,7 @@ await setStore(false, {}, true);
 await load(2500);
 side = await sideState();
 check("minimalist: X's blocks never drawn while loading and after X reorders", side.seen.length === 0 && side.visible === 0, `drawn=${side.seen.join(",")} visible=${side.visible}`);
-check("minimalist: search bar and switches shown", side.search && side.card && side.min === "true" && side.sub === "Hides news, trends and menu extras", JSON.stringify(side));
+check("minimalist: search bar and switches shown", side.search && side.card && side.min === "true" && side.sub === "Hides ads, suggestions, trends, menu extras", JSON.stringify(side));
 check("minimalist: left menu drew only Home, Notifications, Profile and Post, never the rest", side.menuSeen === MENU_KEPT && side.menuNow === MENU_KEPT, `drawn=${side.menuSeen}`);
 check("minimalist: Never twice left off", side.store?.on === false && side.store?.min === true, JSON.stringify(side.store));
 if (SHOTS) await page.shot(path.join(root, "docs", "minimalist.png"), { clip: { x: 0, y: 0, width: 1200, height: 520, scale: 1 } });
@@ -360,6 +361,117 @@ if (two) {
 two = await withCopy(OLD.replaceAll("rewritten(this, raw)", "rewritten(this,raw)"), true);
 check("unrecognised copy first: the tab answers (no freeze)", !!two, two ? `cards=${two.hosts}` : "");
 await page.goto("about:blank", 300);
+
+// 9. Minimalist across X: no ads or suggestions in any timeline, Following
+// newest first, For you empty, a phone's bars trimmed, Explore only a search box.
+{
+  // A call to X's API made by the page, so it goes through the extension.
+  const call = (op, method = "GET") =>
+    page.eval(`new Promise((resolve) => {
+      const x = new XMLHttpRequest();
+      x.open("${method}", location.origin + "/i/api/graphql/MOCKqid/${op}");
+      x.setRequestHeader("x-client-transaction-id", "t");
+      x.onload = () => resolve(x.responseText);
+      x.send(${method === "POST" ? `JSON.stringify({ variables: { count: 20 } })` : ""});
+    })`);
+  const ids = (text, path) => path(JSON.parse(text)).flatMap((i) => (i.entries || []).map((e) => e.entryId.replace(/-\d{6,}$/, "")));
+  const detail = (j) => j.data.threaded_conversation_with_injections_v2.instructions;
+  const profile = (j) => j.data.user.result.timeline.timeline.instructions;
+
+  // Home, Minimalist alone and with Never twice.
+  for (const on of [false, true]) {
+    await page.goto(URL_, 300);
+    await setStore(on, {}, true);
+    await load(2000);
+    await scrollToEnd(4);
+    s = await state();
+    const cut = (s.log?.recent || []).reduce((n, r) => n + (r.cut || 0), 0);
+    check(`minimalist${on ? " + Never twice" : ""}: no ad, "Who to follow" or Premium prompt on Home`, s.ads === 0 && s.suggested === 0 && s.ids.length >= 30 && cut >= 3, `ads=${s.ads} suggested=${s.suggested} posts=${s.ids.length} cut=${cut}`);
+  }
+  await page.goto(URL_, 300);
+  await setStore(false);
+  await load(2000);
+  await scrollToEnd(4);
+  s = await state();
+  check("control: without Minimalist, X's ads and suggestions are drawn", s.ads >= 1 && s.suggested >= 4, `ads=${s.ads} suggested=${s.suggested}`);
+
+  // Following sorted by "Popular": Minimalist asks for newest first.
+  await page.goto(URL_, 300);
+  await setStore(true, {}, true);
+  await dev("/__reset");
+  await page.goto(URL_ + "?ranked=1", 2000);
+  await scrollToEnd(3);
+  let ranked = await dev("/__ranked");
+  s = await state();
+  check("minimalist: Following asked newest first, never Popular", ranked.length >= 2 && ranked.every((r) => r === false) && s.ids.length >= 20, `server saw enableRanking=${ranked.join(",")}`);
+  await dev("/__reset");
+  await setStore(true);
+  await page.goto(URL_ + "?ranked=1", 1500);
+  ranked = await dev("/__ranked");
+  check("control: without Minimalist, Popular stays Popular", ranked[0] === true, ranked.join(","));
+
+  // For you, should X load it: empty, and ended.
+  await page.goto(URL_, 300);
+  await setStore(false, {}, true);
+  await load(1500);
+  let text = await call("HomeTimeline", "POST");
+  let list = JSON.parse(text).data.home.home_timeline_urt.instructions;
+  const forYouLeft = list.flatMap((i) => i.entries || []).filter((e) => !e.content?.cursorType).length;
+  check("minimalist: For you comes back empty and ended", forYouLeft === 0 && list.some((i) => i.type === "TimelineTerminateTimeline"), `entries left=${forYouLeft}`);
+
+  // A post's replies and a profile.
+  check("minimalist: a post's replies lose the ads and Discover more", ids(await call("TweetDetail"), detail).join() === "tweet,conversationthread-1,cursor-bottom-1"
+    && JSON.parse(await call("TweetDetail")).data.threaded_conversation_with_injections_v2.instructions[0].entries[1].content.items.length === 1, ids(await call("TweetDetail"), detail).join());
+  text = await call("UserTweets");
+  check("minimalist: a profile loses its ads, Who to follow and an ad added to a thread", ids(text, profile).join() === "tweet,tweet,cursor-bottom-1" && profile(JSON.parse(text))[2].moduleItems.length === 1, ids(text, profile).join());
+  const rawUser = await fetch(BASE + "/i/api/graphql/MOCKqid/UserByScreenName").then((r) => r.text());
+  check("minimalist: a call with no timeline is passed on as it came", (await call("UserByScreenName")) === rawUser);
+  await setStore(false);
+  await load(800);
+  check("control: without Minimalist, replies keep what X sent", ids(await call("TweetDetail"), detail).join() === "tweet,conversationthread-1,promoted-tweet,tweetdetailrelatedtweets-1,cursor-bottom-1", ids(await call("TweetDetail"), detail).join());
+
+  // A phone: Home's tabs are in X's top bar. Only Following shows there, For you
+  // never, and the bottom bar and drawer keep what Minimalist keeps.
+  await page.send("Page.addScriptToEvaluateOnNewDocument", {
+    source: `window.__forYouTabSeen = 0;
+      (function frame() {
+        const tab = document.querySelector("[role=tablist] [role=tab]");
+        if (tab && tab.getBoundingClientRect().height > 0 && /For you/.test(tab.textContent)) window.__forYouTabSeen++;
+        requestAnimationFrame(frame);
+      })();`,
+  });
+  const shownLinks = (sel) => page.eval(`[...document.querySelectorAll(${JSON.stringify(sel)})].filter((a) => a.getBoundingClientRect().height > 0).map((a) => a.textContent.trim()).join()`);
+  t = await openHome("for-you", true, "?phone=1");
+  await sleep(1500);
+  t = await tabState();
+  const phoneTabs = await page.eval(`[...document.querySelectorAll("[data-testid=TopNavBar] [role=tab]")].filter((a) => a.getBoundingClientRect().height > 0).map((a) => a.textContent).join()`);
+  check("phone: For you remembered, Following opens, For you's posts never drawn", t.open === 1 && t.forYouSeen === 0 && t.posts >= 10 && t.remembered === "following", `open=${t.open} forYouDrawn=${t.forYouSeen} posts=${t.posts}`);
+  check("phone: the top bar shows Following alone, For you never drawn", phoneTabs === "Following" && Number(await page.eval("window.__forYouTabSeen")) === 0, `tabs shown=${phoneTabs} forYouFrames=${await page.eval("window.__forYouTabSeen")}`);
+  check("phone: bottom bar keeps Home, Search and Notifications", (await shownLinks("#layers nav a")) === "Home,Search,Notifications", await shownLinks("#layers nav a"));
+  check("phone: drawer keeps Profile, Bookmarks and Settings", (await shownLinks("#drawer a")) === "Profile,Bookmarks,Settings and privacy", await shownLinks("#drawer a"));
+  check("phone: no Upgrade button in the top bar", (await shownLinks("[data-testid=TopNavBar] a")).split(",").every((x) => x !== "Upgrade"), await shownLinks("[data-testid=TopNavBar] a"));
+  check("log: a phone's tabs are recorded", / phone shown\/1$/.test(t.log || ""), t.log);
+  const bar = JSON.parse(await page.eval(`localStorage.getItem("subfeed.layout")`) || "null")?.bar;
+  check("log: a phone's bottom bar is recorded", /^\/home\/[1-9]\d* \/explore\/[1-9]\d* \/i\/grok\/0 \/notifications\/[1-9]\d* \/i\/chat\/0$/.test(bar || ""), bar);
+  t = await openHome("for-you", false, "?phone=1");
+  check("phone control: without Minimalist, For you stays open and every link shows", t.open === 0 && (await shownLinks("#layers nav a")).split(",").length === 5, `open=${t.open}`);
+
+  // Explore: only its search box. And Grok, Premium, "You might like" and an
+  // ad drawn without its timeline marks are hidden wherever they are.
+  const exploreState = () => page.eval(`JSON.stringify(Object.fromEntries(["xsearch", "xtabs", "xtrends", "xad", "xpost", "xgrok", "xgrok2", "xvideo", "xpremium", "xlike"].map((id) => [id, document.getElementById(id)?.getBoundingClientRect().height > 0])))`).then(JSON.parse);
+  await setStore(false, {}, true);
+  await page.goto(BASE + "/explore", 800);
+  let ex = await exploreState();
+  check("explore: only the search box, and the posts' own parts", JSON.stringify(ex) === JSON.stringify({ xsearch: true, xtabs: false, xtrends: false, xad: false, xpost: true, xgrok: false, xgrok2: false, xvideo: true, xpremium: false, xlike: false }), JSON.stringify(ex));
+  await setStore(false);
+  await page.goto(BASE + "/explore", 800);
+  ex = await exploreState();
+  check("explore control: without Minimalist, all of it shows", Object.values(ex).every(Boolean), JSON.stringify(ex));
+  await setStore(false, {}, true);
+  await load(1000);
+  const nav = await page.eval(`(() => { const h = document.documentElement; history.pushState(null, "", "/explore"); const a = h.hasAttribute("data-subfeed-explore"); history.pushState(null, "", "/home"); return [a, h.hasAttribute("data-subfeed-explore"), h.hasAttribute("data-subfeed-home")].join(); })()`);
+  check("explore: emptied the moment X opens it, back to Home after", nav === "true,false,true", nav);
+}
 
 const failed = results.filter((r) => !r.ok).length;
 console.log(failed ? `${failed} FAILED` : "ALL PASS");

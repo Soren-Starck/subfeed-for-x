@@ -39,6 +39,15 @@
   section { border: 1px solid var(--line); border-radius: 16px; padding: 12px 16px; margin-bottom: 16px; }
   section h2 { margin: 0 0 8px; font-size: 20px; }
   .end { padding: 32px; text-align: center; color: var(--muted); }
+  /* ?phone=1: X's phone layout, its top bar (with Home's tabs) and bottom bar */
+  body.phone .wrap > header[role=banner], body.phone [data-testid=sidebarColumn] { display: none; }
+  body.phone .wrap { flex-direction: column; align-items: center; gap: 0; }
+  body.phone [data-testid=primaryColumn], body.phone [data-testid=TopNavBar] { width: 390px; }
+  [data-testid=TopNavBar] { position: sticky; top: 0; z-index: 3; background: var(--bg); border-bottom: 1px solid var(--line); }
+  [data-testid=TopNavBar] .bar { height: 53px; display: flex; align-items: center; justify-content: space-between; padding: 0 16px; }
+  #layers nav { position: fixed; bottom: 0; left: 0; right: 0; display: flex; justify-content: space-around; background: var(--bg); border-top: 1px solid var(--line); }
+  #layers nav a { padding: 14px 8px; color: var(--fg); text-decoration: none; }
+  #drawer a { display: block; padding: 8px 0; color: var(--fg); }
 </style>
 </head>
 <body>
@@ -108,8 +117,44 @@
   // X remembers (For you, unless you picked Following). Pinned lists would come
   // after the two. ?narrow=1 adds X's top bar above the tabs, as on a phone.
   M.tab = localStorage.getItem("mock.tab") || "following";
-  const narrow = new URLSearchParams(location.search).has("narrow");
-  setTimeout(() => {
+  const params = new URLSearchParams(location.search);
+  const narrow = params.has("narrow");
+  // ?phone=1: X's phone layout. Home's tabs are in X's top bar (outside the
+  // column), the menu is a bottom bar and a drawer behind your picture.
+  const phone = params.has("phone");
+  if (phone) {
+    document.body.classList.add("phone");
+    document.body.insertAdjacentHTML("beforeend", `<div id="layers">
+      <nav role="navigation" aria-label="Primary">
+        <a href="/home" data-testid="AppTabBar_Home_Link" aria-label="Home">Home</a>
+        <a href="/explore" data-testid="AppTabBar_Explore_Link" aria-label="Search and explore">Search</a>
+        <a href="/i/grok" aria-label="Grok">Grok</a>
+        <a href="/notifications" data-testid="AppTabBar_Notifications_Link" aria-label="Notifications">Notifications</a>
+        <a href="/i/chat" data-testid="AppTabBar_DirectMessage_Link" aria-label="Chat">Chat</a>
+      </nav>
+      <div role="dialog" id="drawer">
+        <a href="/you" aria-label="Profile">Profile</a>
+        <a href="/i/premium_sign_up" aria-label="Premium">Premium</a>
+        <a href="/you/communities" aria-label="Communities">Communities</a>
+        <a href="/i/bookmarks" aria-label="Bookmarks">Bookmarks</a>
+        <a href="/i/monetization" aria-label="Monetization">Monetization</a>
+        <a href="/settings" aria-label="Settings and privacy">Settings and privacy</a>
+      </div></div>`);
+  }
+  // Explore, as X draws it: search, its tabs, then what it picks for you. Also
+  // the odds and ends Minimalist hides wherever they are: an ad X drew without
+  // its timeline marks, Grok's and Premium's buttons, "You might like".
+  if (location.pathname === "/explore") {
+    document.querySelector("#home").innerHTML = `
+      <form role="search" id="xsearch"><input placeholder="Search"></form>
+      <nav role="navigation" id="xtabs"><div role="tablist"><div role="presentation"><a role="tab" aria-selected="true" href="/explore/tabs/for-you">For you</a></div><div role="presentation"><a role="tab" href="/explore/tabs/trending">Trending</a></div></div></nav>
+      <section id="xtrends"><h2>Trends for you</h2><div>#Something · 12K posts</div></section>
+      <div data-testid="cellInnerDiv" id="xad"><div data-testid="placementTracking"><article data-testid="tweet">An ad</article></div></div>
+      <div data-testid="cellInnerDiv" id="xpost"><article data-testid="tweet">A post <button aria-label="Actions Grok" id="xgrok">Grok</button><a href="/i/grok" id="xgrok2">Ask Grok</a><div data-testid="placementTracking" id="xvideo">video</div></article></div>
+      <a href="/i/premium_sign_up" id="xpremium">Upgrade</a>
+      <aside role="complementary" id="xlike"><h2>You might like</h2></aside>`;
+  }
+  if (location.pathname === "/home") setTimeout(() => {
     const head = document.createElement("div");
     head.className = "head";
     head.innerHTML = `<div class="blur"></div><div>${narrow ? '<div class="top">𝕏</div>' : ""}<div class="tabsrow"><div class="fill">
@@ -137,7 +182,12 @@
       first();
     }));
     show();
-    document.getElementById("home").prepend(head);
+    if (!phone) return document.getElementById("home").prepend(head);
+    const top = document.createElement("div");
+    top.setAttribute("data-testid", "TopNavBar");
+    top.innerHTML = `<div class="bar"><button data-testid="DashButton_ProfileIcon_Link" aria-label="Profile menu">You</button><span>𝕏</span><a href="/i/premium_sign_up" id="upgrade">Upgrade</a></div>`;
+    top.append(head);
+    document.querySelector("[data-testid=primaryColumn]").before(top);
   }, 40);
 
   // Like X's HttpClient: open, timeout, credentials, headers (with a fresh
@@ -148,6 +198,8 @@
       // X's network monitoring reads every response first, in its own listener.
       xhr.addEventListener("load", () => (M.peeked = (M.peeked || 0) + (xhr.responseText ? 1 : 0)));
       const variables = { count: 20, includePromotedContent: true, latestControlAvailable: true, requestContext: "launch", seenTweetIds: [], ...(cursor ? { cursor } : {}) };
+      // ?ranked=1: Following sorted by "Popular", as X remembers it once picked.
+      if (params.has("ranked") && M.tab === "following") variables.enableRanking = true;
       const op = M.tab === "for-you" ? "HomeTimeline" : "HomeLatestTimeline";
       M.ops.push(op);
       xhr.open("POST", location.origin + "/i/api/graphql/MOCKqid/" + op);
@@ -188,6 +240,8 @@
   const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
   const unwrap = (r) => (r?.__typename === "TweetWithVisibilityResults" ? r.tweet : r);
   function cell(ic) {
+    if (ic.itemType === "TimelineUser") return `<div data-testid="cellInnerDiv" class="suggest"><div data-testid="UserCell">${esc(ic.user_results.result.legacy.name)}</div></div>`;
+    if (ic.itemType === "TimelineMessagePrompt") return `<div data-testid="cellInnerDiv" class="suggest">${esc(ic.content.headerText)}</div>`;
     const t = unwrap(ic.tweet_results.result);
     const o = unwrap(t.legacy.retweeted_status_result?.result) || t;
     const u = o.core.user_results.result.legacy;
@@ -203,7 +257,10 @@
     for (const e of M.entries) {
       const c = e.content;
       if (c.itemContent) html.push(cell(c.itemContent));
-      else if (c.items) for (const it of c.items) html.push(cell(it.item.itemContent));
+      else if (c.items) {
+        if (c.header) html.push(`<div data-testid="cellInnerDiv" class="suggest"><h2>${esc(c.header.text)}</h2></div>`);
+        for (const it of c.items) html.push(cell(it.item.itemContent));
+      }
     }
     // X's empty timeline: no posts means "Welcome to X!", and no more paging.
     if (!html.length) html.push(`<div data-testid="emptyState"><div><h2 data-testid="empty_state_header_text"><span>Welcome to X!</span></h2>
@@ -243,7 +300,7 @@
     M.loading = false;
     near();
   }
-  first();
+  if (location.pathname === "/home") first();
 </script>
 </body>
 </html>

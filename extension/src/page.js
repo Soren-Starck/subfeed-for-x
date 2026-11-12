@@ -4,6 +4,11 @@
    except its search bar and these switches, leaves only Home,
    Notifications, Profile and Post in the left menu, and drops Home's tab
    bar (For you, Following) to keep you on Following, before X draws them.
+   Following stays newest first, and For you stays empty. Ads, "Who to
+   follow", "Discover more" and other suggested posts or people are taken out
+   of every timeline X loads (Home, a post's replies, profiles, search), and
+   Explore is only a search box. Grok and Premium prompts go too. On a phone
+   (or a narrow window) the bottom bar keeps Home, Search and Notifications.
 
    "Never twice": when it is on, X's home
    timeline (For you and Following) leaves out
@@ -19,12 +24,13 @@
    why it runs in the page's world, at document_start. */
 (() => {
   "use strict";
-  const VERSION = "0.7.0";
+  const VERSION = "0.8.0";
   const HOUR = 3600e3;
   const MAX_AGE = 72 * HOUR;
   const FORGET = 14 * 24 * HOUR; // read posts are remembered this long
   const KEY = "subfeed";
   const TIMELINE = /\/graphql\/[\w-]+\/(HomeTimeline|HomeLatestTimeline)(?:[?/]|$)/;
+  const GRAPHQL = /\/graphql\/[\w-]+\/(\w+)(?:[?/]|$)/;
   const STATUS = /\/status\/(\d+)/;
   const EPOCH = 1288834974657; // X's snowflake ids carry their creation time
 
@@ -81,6 +87,14 @@
     '[data-testid="SideNav_NewTweet_Button"]', '[href="/compose/post"]',
   ].join(", ");
   const MENU = 'header[role="banner"] nav[role="navigation"]';
+  // On a phone the menu is a bottom bar and a drawer (behind your picture):
+  // these go from both, and from the desktop menu's "More".
+  const EXTRAS = [
+    '[href="/i/grok"]', '[href^="/i/chat"]', '[href="/messages"]', '[href$="/communities"]', '[href^="/i/communities"]',
+    '[href^="/i/premium"]', '[href^="/i/verified"]', '[href="/jobs"]', '[href^="/i/jf/"]', '[href^="/i/spaces"]',
+    '[href="/i/connect_people"]', '[href^="/i/topics"]', '[href^="/i/monetization"]', '[href="/i/calls"]',
+    '[href*="ads.x.com"]', '[href*="ads.twitter.com"]', '[href^="/compose/articles"]',
+  ].join(", ");
   const pageSheet = new CSSStyleSheet();
   pageSheet.replaceSync(`
     html[data-subfeed-min] [data-testid="sidebarColumn"]:not(:has(subfeed-switch)) { visibility: hidden !important; }
@@ -88,14 +102,46 @@
     html[data-subfeed-min] header[role="banner"] h1,
     html[data-subfeed-min] [data-testid="SideNav_AccountSwitcher_Button"],
     html[data-subfeed-min] [data-subfeed-tabs],
-    html[data-subfeed-min] ${MENU} :is(a, button):not(${KEEP}) { display: none !important; }
+    html[data-subfeed-home] [data-testid="TopNavBar"] [role="tablist"] > :not(:nth-child(2)),
+    html[data-subfeed-min] ${MENU} :is(a, button):not(${KEEP}),
+    html[data-subfeed-min] :is(nav, #layers, [role="dialog"], [role="menu"]) a:is(${EXTRAS}),
+    html[data-subfeed-min] [data-testid="TopNavBar"] a[href^="/i/premium"],
+    html[data-subfeed-min] [data-testid="GrokDrawer"],
+    html[data-subfeed-min] button[aria-label*="Grok"],
+    html[data-subfeed-min] button[data-testid="grokImgGen"],
+    html[data-subfeed-min] [data-testid="tweet"] a[href="/i/grok"],
+    html[data-subfeed-min] [data-testid^="followups_"],
+    html[data-subfeed-min] a[href^="/i/premium_sign_up"],
+    html[data-subfeed-min] [data-testid="verified_profile_upsell"],
+    html[data-subfeed-min] [data-testid="verified_profile_visitor_upsell"],
+    html[data-subfeed-min] [data-testid="super-upsell-UpsellCardRenderProperties"],
+    html[data-subfeed-min] [data-testid="primaryColumn"] aside[role="complementary"],
+    html[data-subfeed-min] [data-testid="cellInnerDiv"]:has([data-testid="placementTracking"] article[data-testid="tweet"]),
+    html[data-subfeed-explore] :is([data-testid="primaryColumn"], [data-testid="TopNavBar"]) nav:has([role="tablist"]),
+    html[data-subfeed-explore] [data-testid="primaryColumn"] section { display: none !important; }
   `);
+  // Explore without what X picks for you: only its search box stays.
+  const EXPLORE = /^\/explore(\/|$)/;
   function minimal() {
     if (!document.adoptedStyleSheets.includes(pageSheet)) document.adoptedStyleSheets = [...document.adoptedStyleSheets, pageSheet];
     const html = document.documentElement;
     if (html.hasAttribute("data-subfeed-min") !== S.min) html.toggleAttribute("data-subfeed-min", S.min);
+    const explore = S.min && EXPLORE.test(location.pathname);
+    if (html.hasAttribute("data-subfeed-explore") !== explore) html.toggleAttribute("data-subfeed-explore", explore);
+    const home = S.min && location.pathname === "/home";
+    if (html.hasAttribute("data-subfeed-home") !== home) html.toggleAttribute("data-subfeed-home", home);
   }
   minimal();
+  // X changes pages without loading one: Explore is emptied before it draws.
+  for (const name of ["pushState", "replaceState"]) {
+    const native = history[name];
+    history[name] = function () {
+      const out = native.apply(this, arguments);
+      minimal();
+      return out;
+    };
+  }
+  addEventListener("popstate", minimal);
 
   // ---------- one copy per page. After the extension reloads, Chromium can
   // keep injecting the copy it had before into X tabs that were already open,
@@ -115,7 +161,8 @@
   running = true;
 
   // ---------- the filter
-  const stats = { responses: 0, read: 0, old: 0 };
+  const stats = { responses: 0, read: 0, old: 0, cut: 0 };
+  let forYouShown = false; // Home's last timeline was For you, emptied by Minimalist
   const idTime = (id) => {
     try {
       return Number(BigInt(id) >> 22n) + EPOCH;
@@ -150,12 +197,67 @@
     return Array.isArray(ins) ? ins : null;
   };
   const isEnd = (ins) => ins.type === "TimelineTerminateTimeline" && ins.direction === "Bottom";
+  const isCursor = (entry) => !!entry?.content?.cursorType;
+
+  // ---------- Minimalist in X's timelines: ads and suggestions, found by the
+  // entry ids X gives them, are taken out of every timeline it loads.
+  const SUGGESTED = /^(promoted|who-?to-?(follow|subscribe)|(communit(y|ies)|topics?|lists?)-to-(join|follow)|tweetdetailrelatedtweets|messageprompt|relevance-?prompt|pivot)/i;
+  const isAd = (ic) => !!ic?.promotedMetadata;
+  // Every list of instructions in a response, wherever X puts it (Home,
+  // TweetDetail, UserTweets, SearchTimeline...).
+  function instructionLists(obj, out = [], depth = 0) {
+    if (!obj || typeof obj !== "object" || Array.isArray(obj) || depth > 7) return out;
+    if (Array.isArray(obj.instructions)) out.push(obj.instructions);
+    else for (const v of Object.values(obj)) instructionLists(v, out, depth + 1);
+    return out;
+  }
+  // Takes ads and suggestions out, in place; returns how many went.
+  function tidy(json) {
+    let cut = 0;
+    const keepItem = (it) => !SUGGESTED.test(it?.entryId || "") && !isAd(it?.item?.itemContent);
+    const keepEntry = (e) => {
+      if (SUGGESTED.test(e?.entryId || "") || isAd(e?.content?.itemContent)) return false;
+      const items = e?.content?.items;
+      if (Array.isArray(items)) {
+        e.content.items = items.filter(keepItem);
+        if (items.length && !e.content.items.length) return false;
+      }
+      return true;
+    };
+    for (const list of instructionLists(json)) {
+      for (const ins of list) {
+        if (Array.isArray(ins.entries)) {
+          const n = ins.entries.length;
+          ins.entries = ins.entries.filter(keepEntry);
+          cut += n - ins.entries.length;
+        }
+        if (Array.isArray(ins.moduleItems)) {
+          const n = ins.moduleItems.length;
+          ins.moduleItems = ins.moduleItems.filter(keepItem);
+          cut += n - ins.moduleItems.length;
+        }
+      }
+    }
+    return cut;
+  }
 
   // Drops read and old posts from one timeline response, in place.
   function filter(json, req) {
     const instructions = instructionsOf(json);
     if (!instructions) return null;
-    const r = { read: 0, old: 0, kept: 0, end: false };
+    const r = { read: 0, old: 0, kept: 0, end: false, cut: 0 };
+    if (S.min) {
+      r.cut = tidy(json);
+      // Minimalist keeps Home on Following: For you, if X ever loads it, is
+      // empty and ends at once, so not one of its posts can show.
+      if (req.op === "HomeTimeline") {
+        for (const ins of instructions) {
+          if (ins.type === "TimelineAddEntries" && Array.isArray(ins.entries)) ins.entries = ins.entries.filter(isCursor);
+        }
+        if (!instructions.some(isEnd)) instructions.push({ type: "TimelineTerminateTimeline", direction: "Bottom" });
+        return { ...r, end: true, forYou: true };
+      }
+    }
     if (!S.on) return r;
     const cutoff = Date.now() - MAX_AGE;
     let reachedOld = false;
@@ -317,7 +419,7 @@
     const total = { ...r, pages: 0 };
     const t0 = Date.now();
     // Only a first load or X's "load older" is topped up, never its polls for newer posts.
-    if (S.on && !tops.has(req.cursor)) {
+    if (S.on && !r.forYou && !tops.has(req.cursor)) {
       const wanted = () => (total.kept ? total.kept < WANT && Date.now() - t0 < SOFT : Date.now() - t0 < BUDGET);
       while (!total.end && total.pages < MAX_PAGES && wanted()) {
         const cursor = cursorOf(json, "Bottom");
@@ -332,6 +434,7 @@
         total.read += p.read;
         total.old += p.old;
         total.kept += p.kept;
+        total.cut += p.cut;
         total.end = total.end || p.end;
         merge(json, res.json);
       }
@@ -339,20 +442,23 @@
     const top = cursorOf(json, "Top");
     if (top) tops.add(top);
     done(req, total, Date.now() - t0);
-    return (xhr[OUT] = { json, text: total.read || total.old || total.end ? JSON.stringify(json) : raw });
+    return (xhr[OUT] = { json, text: total.read || total.old || total.end || total.cut ? JSON.stringify(json) : raw });
   }
 
   function done(req, r, ms) {
     stats.responses++;
     stats.read += r.read;
     stats.old += r.old;
-    log({ op: req.op, method: req.method, count: req.count, cursor: req.cursor ? (tops.has(req.cursor) ? "top" : "more") : "first", read: r.read, old: r.old, kept: r.kept, end: r.end, pages: r.pages || 0, ms, fail: r.fail, held: !!req.held, ctx: req.ctx, ...req.shape });
+    stats.cut += r.cut || 0;
+    log({ op: req.op, method: req.method, count: req.count, cursor: req.cursor ? (tops.has(req.cursor) ? "top" : "more") : "first", read: r.read, old: r.old, kept: r.kept, cut: r.cut, end: r.end, pages: r.pages || 0, ms, fail: r.fail, held: !!req.held, ctx: req.ctx, ranked: req.ranked, ...req.shape });
     paint();
-    if (S.on && !req.cursor && !r.kept) watchEmpty();
+    if (!req.cursor) forYouShown = !!r.forYou;
+    if ((S.on || r.forYou) && !req.cursor && !r.kept) watchEmpty();
   }
 
   // ---------- the hook on X's timeline requests
   const REQ = Symbol("subfeed.req");
+  const CLEAN = Symbol("subfeed.clean");
   const OUT = Symbol("subfeed.out");
   const XHR = XMLHttpRequest.prototype;
   const open = XHR.open;
@@ -361,11 +467,28 @@
   const nativeText = Object.getOwnPropertyDescriptor(XHR, "responseText").get;
   XHR.open = function (method, url) {
     const m = TIMELINE.exec(String(url));
+    if (m && S.min && m[1] === "HomeLatestTimeline") url = arguments[1] = newestFirst(String(url));
     // "Popular" sort on Following isn't chronological: never end it early.
     this[REQ] = m ? { op: m[1], method: String(method).toUpperCase(), url: String(url), headers: [], ranked: /enableRanking(%22)?(%3A|":)true/.test(String(url)) } : null;
+    // Any other call to X's API: Minimalist takes ads and suggestions out.
+    this[CLEAN] = !m && GRAPHQL.test(String(url));
     this[OUT] = undefined;
     return open.apply(this, arguments);
   };
+  // Minimalist keeps Following newest first: X's "Popular" sort is X choosing
+  // for you again. A GET carries it in the URL, a POST in its body.
+  function newestFirst(url) {
+    try {
+      const u = new URL(url, location.href);
+      const v = JSON.parse(u.searchParams.get("variables") || "null");
+      if (v?.enableRanking !== true) return url;
+      v.enableRanking = false;
+      u.searchParams.set("variables", JSON.stringify(v));
+      return u.href;
+    } catch {
+      return url;
+    }
+  }
   XHR.setRequestHeader = function (name, value) {
     if (this[REQ]) this[REQ].headers.push([name, value]);
     return setHeader.apply(this, arguments);
@@ -373,6 +496,13 @@
   XHR.send = function (body) {
     const req = this[REQ];
     if (req) {
+      if (S.min && req.op === "HomeLatestTimeline" && typeof body === "string" && /"enableRanking":\s*true/.test(body)) {
+        try {
+          const b = JSON.parse(body);
+          b.variables.enableRanking = false;
+          body = arguments[0] = JSON.stringify(b);
+        } catch {}
+      }
       req.body = body;
       if (typeof body === "string" && /"enableRanking":\s*true/.test(body)) req.ranked = true;
       try {
@@ -411,12 +541,28 @@
       const json = typeof raw === "string" ? JSON.parse(raw) : raw;
       xhr[REQ].shape ||= shape(json);
       r = filter(json, xhr[REQ]);
-      out = { json, text: r && (r.read || r.old || r.end) && typeof raw === "string" ? JSON.stringify(json) : raw };
+      out = { json, text: r && (r.read || r.old || r.end || r.cut) && typeof raw === "string" ? JSON.stringify(json) : raw };
     } catch {
       out = { json: raw, text: raw };
     }
     if (xhr[HELD]) return out;
     if (r) done(xhr[REQ], r, 0);
+    return (xhr[OUT] = out);
+  }
+  // Any other timeline (a post's replies, a profile, search) without its ads
+  // and suggestions. Most of X's calls have none, and are passed on as they came.
+  function cleaned(xhr, raw) {
+    if (xhr[OUT] !== undefined) return xhr[OUT];
+    let out = { json: raw, text: raw };
+    try {
+      const json = typeof raw === "string" ? JSON.parse(raw) : raw;
+      const cut = tidy(json);
+      out = { json, text: cut && typeof raw === "string" ? JSON.stringify(json) : raw };
+      if (cut) {
+        stats.cut += cut;
+        writeLog();
+      }
+    } catch {}
     return (xhr[OUT] = out);
   }
   for (const prop of ["responseText", "response"]) {
@@ -425,10 +571,10 @@
       ...d,
       get() {
         const raw = d.get.call(this);
-        if (!this[REQ] || this.readyState !== 4 || this.status !== 200) return raw;
-        if (prop === "response" && this.responseType === "json") return rewritten(this, raw).json;
-        if (prop === "response" && this.responseType && this.responseType !== "text") return raw;
-        return rewritten(this, raw).text;
+        if (!(this[REQ] || (this[CLEAN] && S.min)) || this.readyState !== 4 || this.status !== 200) return raw;
+        if (prop === "response" && this.responseType && this.responseType !== "text" && this.responseType !== "json") return raw;
+        const out = this[REQ] ? rewritten(this, raw) : cleaned(this, raw);
+        return prop === "response" && this.responseType === "json" ? out.json : out.text;
       },
     });
   }
@@ -590,7 +736,7 @@
     ui.never.button.setAttribute("aria-checked", String(S.on));
     ui.never.sub.textContent = subtitle();
     ui.min.button.setAttribute("aria-checked", String(S.min));
-    ui.min.sub.textContent = S.min ? "Hides news, trends and menu extras" : "Off";
+    ui.min.sub.textContent = S.min ? "Hides ads, suggestions, trends, menu extras" : "Off";
   }
 
   // Right under X's search bar, above its first sidebar block. X re-renders
@@ -661,15 +807,21 @@
   function homeTabs() {
     tabsDone = false;
     if (!S.min || location.pathname !== "/home") return;
-    const list = document.querySelector('[data-testid="primaryColumn"] [role="tablist"]');
+    // A phone's (or a narrow window's) tabs sit in X's top bar, outside the column.
+    const list = document.querySelector('[data-testid="primaryColumn"] [role="tablist"], [data-testid="TopNavBar"] [role="tablist"]');
     if (!list) return;
-    if (!tabBar?.isConnected || !tabBar.contains(list)) {
-      tabBar = barOf(list);
-      tabBar?.setAttribute("data-subfeed-tabs", "");
-    }
     // For you and Following always come first; pinned lists can only follow.
     const following = list.querySelector('[role="tab"][data-pinned-timeline="following"]') || list.querySelectorAll('[role="tab"]')[1];
     if (!following) return;
+    if (list.closest('[data-testid="TopNavBar"]')) {
+      // There the bar can't go (X keeps its room above the posts): it keeps
+      // only Following (the stylesheet, so it holds while X redraws the bar),
+      // which then reads as Home's title.
+      tabBar = list;
+    } else if (!tabBar?.isConnected || !tabBar.contains(list)) {
+      tabBar = barOf(list);
+      tabBar?.setAttribute("data-subfeed-tabs", "");
+    }
     if (following.getAttribute("aria-selected") === "true") return (tabsDone = !!tabBar);
     if (Date.now() - tabClick < 1000) return;
     tabClick = Date.now();
@@ -697,9 +849,9 @@
   function record() {
     layoutTimer ||= setTimeout(() => {
       layoutTimer = 0;
-      const seen = { column: layout(), menu: menu(), tabs: tabs() };
+      const seen = { column: layout(), menu: menu(), tabs: tabs(), bar: bottomBar() };
       const next = JSON.stringify(seen);
-      if ((!seen.column && !seen.menu) || next === recorded) return;
+      if ((!seen.column && !seen.menu && !seen.tabs && !seen.bar) || next === recorded) return;
       recorded = next;
       try {
         localStorage.setItem(KEY + ".layout", JSON.stringify({ t: Date.now(), path: location.pathname, min: S.min, ...seen }));
@@ -719,14 +871,22 @@
     return `logo/${h('header[role="banner"] h1')} ${items.join(" ")} post/${h('[data-testid="SideNav_NewTweet_Button"]')} account/${h('[data-testid="SideNav_AccountSwitcher_Button"]')}`;
   }
 
+  // A phone's bottom bar, for the log: each link and its height (0 = hidden).
+  function bottomBar() {
+    return [...document.querySelectorAll('#layers nav a, [data-testid="BottomBar"] a')]
+      .map((a) => `${a.getAttribute("href")}/${Math.round(a.getBoundingClientRect().height)}`)
+      .join(" ");
+  }
+
   // Home's tabs, for the log: which one is open, and the hidden bar's height.
   function tabs() {
-    const list = location.pathname === "/home" && document.querySelector('[data-testid="primaryColumn"] [role="tablist"]');
+    const list = location.pathname === "/home" && document.querySelector('[data-testid="primaryColumn"] [role="tablist"], [data-testid="TopNavBar"] [role="tablist"]');
     if (!list) return "";
     const all = [...list.querySelectorAll('[role="tab"]')];
     let up = 0;
     for (let el = list; tabBar && el && el !== tabBar; el = el.parentElement) up++;
-    return `tabs/${all.length} open/${all.findIndex((t) => t.getAttribute("aria-selected") === "true")} bar/${tabBar?.contains(list) ? up : -1}/${Math.round(tabBar?.getBoundingClientRect().height ?? -1)}`;
+    const shown = all.filter((t) => t.getBoundingClientRect().height > 0).length;
+    return `tabs/${all.length} open/${all.findIndex((t) => t.getAttribute("aria-selected") === "true")} bar/${tabBar?.contains(list) ? up : -1}/${Math.round(tabBar?.getBoundingClientRect().height ?? -1)}${list.closest('[data-testid="TopNavBar"]') ? ` phone shown/${shown}` : ""}`;
   }
 
   // What the column holds, for the log: each block's kind and height (0 = hidden).
@@ -746,11 +906,15 @@
   // Everything from the last 72 h is read: X would greet you like a brand
   // new account ("Welcome to X!"), so its empty state says what happened.
   function caughtUp() {
-    if (!S.on || location.pathname !== "/home" || !(stats.read || stats.old)) return false;
+    if (location.pathname !== "/home" || !(forYouShown || (S.on && (stats.read || stats.old)))) return false;
     const box = document.querySelector('[data-testid="primaryColumn"] [data-testid="emptyState"]');
     if (!box) return false;
-    relabel(box.querySelector('[data-testid="empty_state_header_text"]'), "You’re all caught up");
-    relabel(box.querySelector('[data-testid="empty_state_body_text"]'), "You’ve read everything new from the people you follow. New posts will show up here.");
+    // For you, emptied by Minimalist, for the moment before Following opens.
+    const [head, body] = forYouShown
+      ? ["Following only", "Home shows the people you follow, newest first."]
+      : ["You’re all caught up", "You’ve read everything new from the people you follow. New posts will show up here."];
+    relabel(box.querySelector('[data-testid="empty_state_header_text"]'), head);
+    relabel(box.querySelector('[data-testid="empty_state_body_text"]'), body);
     const button = box.querySelector('[data-testid="empty_state_button_text"]');
     if (button && button.style.display !== "none") button.style.display = "none";
     return true;

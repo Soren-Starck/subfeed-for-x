@@ -3,7 +3,7 @@
 A browser extension that adds two switches to X (Twitter) on the web.
 
 - **Never twice** hides the posts you have already read, and anything older than 72 hours, from your Home timeline.
-- **Minimalist** hides the news, trends, "who to follow" and the footer in the right column, every left-menu item except Home, Notifications, Profile and Post, and Home's tab bar, so Home always shows Following.
+- **Minimalist** hides the news, trends, "who to follow" and the footer in the right column, every left-menu item except Home, Notifications, Profile and Post, and Home's tab bar, so Home always shows Following, newest first. It also takes ads and suggested posts and people out of every timeline, and Grok and Premium prompts out of the page.
 
 ![X with Minimalist on: three menu items, the Post button, the Following timeline with no tab bar, and the two switches under the search bar](docs/minimalist.png)
 
@@ -45,12 +45,16 @@ Firefox and Safari are not supported yet. If you want to port it, see [CONTRIBUT
 - On **Following**, the timeline ends at 72 hours. On **For you**, posts older than 72 hours are dropped wherever they appear.
 - If every page is already read, the extension fetches older pages before X draws the first one, so you don't get X's empty "Welcome to X!" page. When you have read everything from the last 72 hours, X says "You're all caught up".
 - The switch's subtitle counts what it hid in this tab: "Hid 54 read · 7 older than 72 h".
-- Conversations stay whole while any post in them is new to you. Ads are left alone.
+- Conversations stay whole while any post in them is new to you. Ads are left alone (Minimalist removes them).
 
 **Minimalist** applies at once, with no reload. With it on:
 
 - Home has no tab bar (For you, Following, pinned lists, +) and always shows Following. If X had For you or a list open, Minimalist switches to Following before X draws a post, and X remembers that choice.
+- Following stays sorted by **Recent**: if X had it on **Popular**, Minimalist asks X for the newest posts first. For you, if X ever loads it, comes back empty.
+- Ads, "Who to follow", "Discover more" under a post, and X's other suggested posts, people and Premium prompts are removed from every timeline X loads (Home, a post's replies, profiles, search), before X draws them.
+- Explore is only a search box: its tabs and what X picks for you there are hidden. Grok buttons on posts and Premium upgrade buttons are hidden everywhere.
 - X's logo, the account button and the **More** menu are hidden too. Turn Minimalist off to switch accounts, open a pinned list or reach Settings, or go straight to [x.com/settings](https://x.com/settings).
+- In a narrow window (X's phone layout), Home's tab row shows only Following, the bottom bar keeps Home, Search and Notifications, and the menu behind your picture loses Premium, Communities, Monetization and the like.
 
 When the browser window is too narrow, X drops its right column, and the switches go with it. Widen the window to see them again.
 
@@ -82,9 +86,9 @@ To start over, remove those keys in DevTools (Application, Local storage, `https
 
 ## How it works
 
-X's web app loads timelines with `XMLHttpRequest` and reads `responseText`. The extension runs in the page itself at `document_start` and wraps those reads for the `HomeTimeline` and `HomeLatestTimeline` GraphQL calls, removing read and old posts before X's code sees them. Minimalist is one stylesheet, keyed to X's `data-testid` attributes and links, that the extension adds to the page before X draws it, plus one click on Home's Following tab when another tab is open.
+X's web app loads timelines with `XMLHttpRequest` and reads `responseText`. The extension runs in the page itself at `document_start` and wraps those reads for the `HomeTimeline` and `HomeLatestTimeline` GraphQL calls, removing read and old posts before X's code sees them. With Minimalist on, it also reads X's other GraphQL timelines and drops the entries X marks as ads or suggestions (`promoted-…`, `who-to-follow-…`, `tweetdetailrelatedtweets-…` and the like); a response with none of them is passed on untouched. Minimalist's look is one stylesheet, keyed to X's `data-testid` attributes and links, that the extension adds to the page before X draws it, plus one click on Home's Following tab when another tab is open.
 
-All of it is in [`extension/src/page.js`](extension/src/page.js), about 800 commented lines with no dependencies and no build step. The optional sync is [`extension/src/sync.js`](extension/src/sync.js), which talks to the server through [`extension/src/background.js`](extension/src/background.js).
+All of it is in [`extension/src/page.js`](extension/src/page.js), about 950 commented lines with no dependencies and no build step. The optional sync is [`extension/src/sync.js`](extension/src/sync.js), which talks to the server through [`extension/src/background.js`](extension/src/background.js).
 
 X changes its web app often. If it changes how timelines load, the switch's subtitle says "Not filtering: X changed how it loads posts". Please [open an issue](https://github.com/Soren-Starck/subfeed-for-x/issues/new/choose) when you see that, or when Minimalist misses something.
 

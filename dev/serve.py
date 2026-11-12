@@ -101,19 +101,65 @@ def page(n):
         ad["promotedMetadata"] = {"advertiser_results": {}}
         ad["tweet_results"]["result"]["rest_id"] = snowflake(T0 - 40 * 86400000, n)
         entries.insert(3, {"entryId": f"promoted-tweet-{n}-abc", "sortIndex": "x", "content": {"entryType": "TimelineTimelineItem", "itemContent": ad}})
+    # X's suggestions: "Who to follow" on even pages, a Premium prompt on the first
+    if n % 2 == 0:
+        entries.insert(8, who_to_follow(f"who-to-follow-{n}"))
+    if n == 0:
+        entries.insert(2, {"entryId": "messageprompt-premium-plus-upsell-prompt", "sortIndex": "p", "content": {"entryType": "TimelineTimelineItem", "itemContent": {"itemType": "TimelineMessagePrompt", "content": {"headerText": "Get Premium"}}}})
     entries.append({"entryId": f"cursor-top-{n}", "sortIndex": "top", "content": {"entryType": "TimelineTimelineCursor", "value": "top", "cursorType": "Top"}})
     if start + PAGE < len(FEED):
         entries.append({"entryId": f"cursor-bottom-{n}", "sortIndex": "bottom", "content": {"entryType": "TimelineTimelineCursor", "value": f"p:{n + 1}", "cursorType": "Bottom"}})
     return {"data": {"home": {"home_timeline_urt": {"instructions": [{"type": "TimelineAddEntries", "entries": entries}], "metadata": {}}}}}
 
 
+def who_to_follow(entry_id):
+    users = [{"entryId": f"{entry_id}-user-{i}", "item": {"itemContent": {"itemType": "TimelineUser", "__typename": "TimelineUser", "user_results": {"result": {"__typename": "User", "legacy": {"name": f"Suggested {i}", "screen_name": f"suggested_{i}"}}}}}} for i in range(3)]
+    return {"entryId": entry_id, "sortIndex": "w", "content": {"entryType": "TimelineTimelineModule", "__typename": "TimelineTimelineModule", "displayType": "Vertical", "header": {"text": "Who to follow"}, "items": users}}
+
+
+def entry(i, prefix="tweet"):
+    ic = item_content(i)
+    return {"entryId": f"{prefix}-{ic['tweet_results']['result']['rest_id']}", "sortIndex": "s", "content": {"entryType": "TimelineTimelineItem", "itemContent": ic}}
+
+
+def ad(i):
+    e = entry(i, "promoted-tweet")
+    e["content"]["itemContent"]["promotedMetadata"] = {"advertiser_results": {}}
+    return e
+
+
+def other(op):
+    """Other X calls: a post's replies, a profile, and one that is no timeline."""
+    cursor = {"entryId": "cursor-bottom-1", "sortIndex": "c", "content": {"entryType": "TimelineTimelineCursor", "value": "b", "cursorType": "Bottom"}}
+    if op == "TweetDetail":
+        thread = {"entryId": "conversationthread-1", "sortIndex": "t", "content": {"entryType": "TimelineTimelineModule", "items": [
+            {"entryId": "conversationthread-1-tweet-1", "item": {"itemContent": item_content(1)}},
+            {"entryId": "conversationthread-1-promoted-tweet-2", "item": {"itemContent": {**item_content(2), "promotedMetadata": {}}}},
+        ]}}
+        related = {"entryId": "tweetdetailrelatedtweets-1", "sortIndex": "r", "content": {"entryType": "TimelineTimelineModule", "header": {"text": "Discover more"}, "items": [
+            {"entryId": "tweetdetailrelatedtweets-1-tweet-3", "item": {"itemContent": item_content(3)}}]}}
+        ins = [{"type": "TimelineAddEntries", "entries": [entry(0), thread, ad(4), related, cursor]}]
+        return {"data": {"threaded_conversation_with_injections_v2": {"instructions": ins}}}
+    if op == "UserTweets":
+        ins = [
+            {"type": "TimelineClearCache"},
+            {"type": "TimelineAddEntries", "entries": [entry(5), ad(6), who_to_follow("who-to-follow-9"), entry(7), cursor]},
+            {"type": "TimelineAddToModule", "moduleEntryId": "profile-conversation-1", "moduleItems": [
+                {"entryId": "profile-conversation-1-tweet-8", "item": {"itemContent": item_content(8)}},
+                {"entryId": "profile-conversation-1-promoted-tweet-9", "item": {"itemContent": {**item_content(9), "promotedMetadata": {}}}}]},
+        ]
+        return {"data": {"user": {"result": {"__typename": "User", "timeline": {"timeline": {"instructions": ins}}}}}}
+    return {"data": {"user": {"result": {"__typename": "User", "rest_id": "42", "legacy": {"name": "Mara Lindqvist", "screen_name": "mara_lindqvist"}}}}}
+
+
 LOG = []
+RANKED = []
 
 
 class H(http.server.SimpleHTTPRequestHandler):
     def translate_path(self, path):
         p = path.split("?")[0]
-        if p == "/home":
+        if p == "/home" or p == "/explore":
             return os.path.join(HERE, "x-mock.html")
         return os.path.join(EXT, p.lstrip("/"))
 
@@ -124,6 +170,7 @@ class H(http.server.SimpleHTTPRequestHandler):
         cursor = str(v.get("cursor") or "")
         n = int(cursor.split(":")[1]) if cursor.startswith("p:") else 0
         LOG.append(n)
+        RANKED.append(v.get("enableRanking"))
         time.sleep(0.15)
         self.json(page(n))
 
@@ -147,12 +194,17 @@ class H(http.server.SimpleHTTPRequestHandler):
         q = urllib.parse.parse_qs(u.query)
         if "/graphql/" in u.path and u.path.endswith(("HomeLatestTimeline", "HomeTimeline")):
             return self.timeline(json.loads(q.get("variables", ["{}"])[0]))
+        if "/graphql/" in u.path:
+            return self.json(other(u.path.rsplit("/", 1)[-1]))
         if u.path == "/__log":
             return self.json(LOG)
+        if u.path == "/__ranked":
+            return self.json(RANKED)
         if u.path == "/__ids":  # the ids of items 0..upto-1, as the extension stores them
             return self.json([read_id(i) for i in range(min(int(q.get("upto", ["0"])[0]), len(FEED)))])
         if u.path == "/__reset":
             LOG.clear()
+            RANKED.clear()
             return self.json([])
         return super().do_GET()
 
